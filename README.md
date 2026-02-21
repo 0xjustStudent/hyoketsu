@@ -59,9 +59,20 @@ Once built, copy the `.db` file to any machine where you need to scan.
 
 # Show only filename-matched files
 ./hyoketsu scan --filename /path/to/project
+
+# Scan against a remote server (ClickHouse backend)
+./hyoketsu scan --remote http://host:8080 /path/to/project
 ```
 
 Matching order: hash first, then filename fallback (catches renamed files).
+
+## Server
+
+The `server/` directory contains a ClickHouse-backed HTTP server for centralized scanning. See `docker-compose.yml` to get started.
+
+```
+cd server && go build -o server .
+```
 
 ## Extract unknowns
 
