@@ -1,0 +1,18 @@
+# Binaries
+hyoketsu
+server/server
+server/server-linux-amd64
+*.exe
+
+# Data (built by `hyoketsu update`)
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Temp
+*.txt
+*.log
+
+# macOS
+.DS_Store
