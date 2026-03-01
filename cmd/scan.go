@@ -1,13 +1,18 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"hyoketsu/db"
 	"hyoketsu/scanner"
@@ -38,6 +43,10 @@ var scanCmd = &cobra.Command{
 }
 
 func scanLocal(target string) error {
+	if err := ensureDatabase(); err != nil {
+		return err
+	}
+
 	store, err := db.Open(db.DefaultDBPath())
 	if err != nil {
 		return err
@@ -229,6 +238,128 @@ func displayResults(results []scanner.Result) error {
 	}
 	fmt.Printf("\n%d known, %d unknown out of %d total files\n", known, unknown, known+unknown)
 	return nil
+}
+
+const (
+	hyoketsuIndexURL = "https://wordlists-cdn.assetnote.io/hyoketsu/"
+	hyoketsuDBURL    = "https://wordlists-cdn.assetnote.io/hyoketsu/hyoketsu.db"
+)
+
+func ensureDatabase() error {
+	dbPath := db.DefaultDBPath()
+	if _, err := os.Stat(dbPath); err == nil {
+		return nil
+	}
+
+	date, err := fetchRemoteDBDate()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "No local database found at %s\n", dbPath)
+		fmt.Fprintf(os.Stderr, "Could not check for remote database: %v\n", err)
+		return fmt.Errorf("no database available; run 'hyoketsu import' to build one locally")
+	}
+
+	fmt.Printf("No local database found at %s\n", dbPath)
+	fmt.Printf("A pre-built database from the Assetnote team is available (built %s).\n", date)
+	fmt.Print("Would you like to download it? [y/N]: ")
+
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	if answer != "y" && answer != "yes" {
+		return fmt.Errorf("no database available; run 'hyoketsu import' to build one locally")
+	}
+
+	return downloadDatabase(dbPath)
+}
+
+func fetchRemoteDBDate() (string, error) {
+	resp, err := http.Get(hyoketsuIndexURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	// nginx autoindex format: <a href="hyoketsu.db">hyoketsu.db</a>  DD-Mon-YYYY HH:MM  size
+	re := regexp.MustCompile(`hyoketsu\.db</a>\s+(\d{2}-\w{3}-\d{4})`)
+	matches := re.FindSubmatch(body)
+	if matches == nil {
+		return "", fmt.Errorf("hyoketsu.db not found in remote index")
+	}
+
+	t, err := time.Parse("02-Jan-2006", string(matches[1]))
+	if err != nil {
+		return string(matches[1]), nil
+	}
+	return t.Format("January 2, 2006"), nil
+}
+
+func downloadDatabase(dbPath string) error {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+
+	resp, err := http.Get(hyoketsuDBURL)
+	if err != nil {
+		return fmt.Errorf("download database: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed: HTTP %s", resp.Status)
+	}
+
+	tmpPath := dbPath + ".download"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+
+	var reader io.Reader = resp.Body
+	size := resp.ContentLength
+	if size > 0 {
+		fmt.Printf("Downloading database (%.0f MB)...\n", float64(size)/(1024*1024))
+		reader = &progressReader{reader: resp.Body, total: size}
+	} else {
+		fmt.Println("Downloading database...")
+	}
+
+	if _, err := io.Copy(f, reader); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("download interrupted: %w", err)
+	}
+	f.Close()
+
+	if err := os.Rename(tmpPath, dbPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("move database into place: %w", err)
+	}
+
+	fmt.Println("\nDatabase downloaded successfully.")
+	return nil
+}
+
+type progressReader struct {
+	reader  io.Reader
+	total   int64
+	current int64
+	lastPct int
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	pr.current += int64(n)
+	pct := int(float64(pr.current) / float64(pr.total) * 100)
+	if pct != pr.lastPct {
+		fmt.Printf("\r  %d%% (%d / %d MB)", pct, pr.current/(1024*1024), pr.total/(1024*1024))
+		pr.lastPct = pct
+	}
+	return n, err
 }
 
 func init() {
