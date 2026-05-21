@@ -1,4 +1,4 @@
-module hyoketsu
+module github.com/assetnote/hyoketsu
 
 go 1.24.5
 
