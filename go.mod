@@ -1,5 +1,4 @@
-module github.com/assetnote/hyoketsu
-
+module github.com/0xjustStudent/hyoketsu
 go 1.24.5
 
 require (
